@@ -10,13 +10,15 @@ import random
 import math
 import time
 import base64
+import eventlet
+eventlet.monkey_patch()
 
 from flask import Flask, render_template_string
 from flask_socketio import SocketIO
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = "airwriter-secret"
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading",
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet",
                     max_http_buffer_size=10 * 1024 * 1024,
                     transports=["polling", "websocket"],
                     ping_timeout=60, ping_interval=25)
