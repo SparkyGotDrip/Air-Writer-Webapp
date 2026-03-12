@@ -1,10 +1,6 @@
 """
 Air Writer — Web App (Browser Camera Edition)
 Browser captures webcam frames and sends to server for MediaPipe processing.
-Works on any cloud host — no server webcam needed.
-
-Requirements: pip install flask flask-socketio opencv-python-headless mediapipe numpy eventlet
-Run: python app.py  →  open http://localhost:5000
 """
 
 import cv2
@@ -21,7 +17,8 @@ from flask_socketio import SocketIO
 app = Flask(__name__)
 app.config["SECRET_KEY"] = "airwriter-secret"
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading",
-                    max_http_buffer_size=10 * 1024 * 1024)
+                    max_http_buffer_size=10 * 1024 * 1024,
+                    ping_timeout=60, ping_interval=25)
 
 mp_hands       = mp.solutions.hands
 mp_draw        = mp.solutions.drawing_utils
@@ -149,7 +146,7 @@ def process_frame(sid, jpg_bytes):
     arr   = np.frombuffer(jpg_bytes, dtype=np.uint8)
     frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     if frame is None: return
-    frame = cv2.flip(frame, 1)
+
     h, w  = frame.shape[:2]
     if s["canvas"] is None or s["canvas"].shape != frame.shape:
         s["canvas"] = np.zeros_like(frame)
@@ -216,7 +213,7 @@ def process_frame(sid, jpg_bytes):
     if s["particle_mode"] or s["particles"]: tick_particles(s, output)
     if s["mirror_mode"]: cv2.line(output, (w//2, 0), (w//2, h), (0,255,255), 1)
 
-    _, buf = cv2.imencode(".jpg", output, [cv2.IMWRITE_JPEG_QUALITY, 75])
+    _, buf = cv2.imencode(".jpg", output, [cv2.IMWRITE_JPEG_QUALITY, 70])
     b64 = base64.b64encode(buf).decode("utf-8")
     socketio.emit("frame", {
         "image": b64, "gesture": mode_text,
@@ -227,16 +224,22 @@ def process_frame(sid, jpg_bytes):
 def on_connect():
     from flask import request
     client_states[request.sid] = make_state()
+    print(f"[+] Client connected: {request.sid}")
 
 @socketio.on("disconnect")
 def on_disconnect():
     from flask import request
     client_states.pop(request.sid, None)
+    print(f"[-] Client disconnected: {request.sid}")
 
 @socketio.on("frame")
 def on_frame(data):
     from flask import request
-    process_frame(request.sid, base64.b64decode(data["image"]))
+    try:
+        jpg = base64.b64decode(data["image"])
+        process_frame(request.sid, jpg)
+    except Exception as e:
+        print(f"Frame error: {e}")
 
 @socketio.on("set_color")
 def on_set_color(data):
@@ -285,17 +288,18 @@ HTML = r"""
   body{display:flex;height:100vh;background:var(--bg);color:var(--text);font-family:'Segoe UI',sans-serif;overflow:hidden}
   #sidebar{width:230px;min-width:230px;background:var(--sidebar);display:flex;flex-direction:column;padding:20px 14px;gap:12px;border-right:1px solid #2a2a4a;overflow-y:auto}
   #sidebar h1{font-size:18px;font-weight:700}
-  #sidebar .sub{font-size:11px;color:var(--muted);margin-top:-8px}
+  .sub{font-size:11px;color:var(--muted);margin-top:-8px}
   .sep{border:none;border-top:1px solid #2a2a4a}
   .section-label{font-size:10px;color:var(--muted);font-weight:700;letter-spacing:.08em;text-transform:uppercase}
-  #gesture-badge{background:var(--card);border-radius:8px;padding:10px 12px;font-size:14px;font-weight:700;text-align:center;min-height:42px;display:flex;align-items:center;justify-content:center}
+  #gesture-badge{background:var(--card);border-radius:8px;padding:10px 12px;font-size:13px;font-weight:700;text-align:center;min-height:42px;display:flex;align-items:center;justify-content:center}
+  #debug-bar{background:#111128;border-radius:6px;padding:6px 10px;font-size:10px;color:#4040AA;font-family:monospace;line-height:1.6}
   .color-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
   .color-btn{width:100%;aspect-ratio:1;border-radius:6px;border:2px solid transparent;cursor:pointer;transition:transform .15s,border-color .15s}
   .color-btn:hover{transform:scale(1.15)}
   .color-btn.active{border-color:white}
-  #color-pill{text-align:center;padding:6px;border-radius:6px;font-weight:700;font-size:12px;transition:background .2s}
+  #color-pill{text-align:center;padding:6px;border-radius:6px;font-weight:700;font-size:12px}
   input[type=range]{width:100%;accent-color:var(--accent);cursor:pointer}
-  .toggle-btn{width:100%;padding:8px;border-radius:8px;border:none;background:var(--card);color:var(--muted);font-size:13px;cursor:pointer;transition:background .2s,color .2s;font-family:inherit}
+  .toggle-btn{width:100%;padding:8px;border-radius:8px;border:none;background:var(--card);color:var(--muted);font-size:13px;cursor:pointer;font-family:inherit}
   .toggle-btn.on{background:#1A3A1A;color:var(--green)}
   .toggle-btn.on.purple{background:#2A1A3A;color:var(--purple)}
   .danger-btn{width:100%;padding:9px;border-radius:8px;border:none;background:#3B1A1A;color:#FF6666;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit}
@@ -304,13 +308,14 @@ HTML = r"""
   .guide-row .g-name{color:#AAAACC}
   .guide-row .g-action{color:var(--muted)}
   #main{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:12px;gap:10px;overflow:hidden}
-  #video-container{position:relative;width:100%;flex:1;display:flex;align-items:center;justify-content:center}
+  #video-container{position:relative;width:100%;flex:1;display:flex;align-items:center;justify-content:center;background:#0a0a14;border-radius:12px}
   #video-feed{max-width:100%;max-height:100%;border-radius:12px;box-shadow:0 0 40px #5B5BFF33;object-fit:contain}
   #no-cam{color:var(--muted);font-size:16px;text-align:center;display:flex;flex-direction:column;gap:12px;align-items:center}
   #no-cam span{font-size:48px}
   #start-btn{padding:12px 28px;background:var(--accent);color:white;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;font-family:inherit}
   #start-btn:hover{background:#7B7BFF}
   #local-video{display:none}
+  #capture-canvas{display:none}
 </style>
 </head>
 <body>
@@ -318,8 +323,13 @@ HTML = r"""
   <h1>✏️ Air Writer</h1>
   <p class="sub">Draw with your hand!</p>
   <hr class="sep">
-  <span class="section-label">Gesture</span>
+  <span class="section-label">Status</span>
   <div id="gesture-badge">👋 Start camera</div>
+  <div id="debug-bar">
+    socket: <span id="d-socket">—</span><br>
+    frames sent: <span id="d-sent">0</span><br>
+    frames recv: <span id="d-recv">0</span>
+  </div>
   <hr class="sep">
   <span class="section-label">Color</span>
   <div class="color-grid" id="color-grid"></div>
@@ -341,23 +351,32 @@ HTML = r"""
   <div class="guide-row"><span class="g-name">🤘 Three (hold)</span><span class="g-action">Particles</span></div>
   <div class="guide-row"><span class="g-name">🖖 Four (hold)</span><span class="g-action">Mirror</span></div>
 </div>
+
 <div id="main">
   <div id="video-container">
     <div id="no-cam">
       <span>📷</span>
-      <p>Allow camera access to start drawing</p>
-      <button id="start-btn" onclick="startCamera()">Start Camera</button>
+      <p>Click below to start your camera</p>
+      <button id="start-btn" onclick="startCamera()">▶ Start Camera</button>
     </div>
     <img id="video-feed" style="display:none;" alt="Processed Feed">
   </div>
 </div>
+
 <video id="local-video" autoplay playsinline muted></video>
-<canvas id="capture-canvas" style="display:none;"></canvas>
+<canvas id="capture-canvas"></canvas>
+
 <script>
 const COLORS={Red:"#FF3B3B",Green:"#3BFF6A",Blue:"#3B7FFF",Yellow:"#FFE83B",Purple:"#CC3BFF",Cyan:"#3BFFFF",White:"#FFFFFF",Orange:"#FFA53B"};
-const socket=io();
-let mirrorOn=false,particleOn=false,activeColor="Red",streaming=false;
+const socket=io({transports:["websocket","polling"]});
+let mirrorOn=false,particleOn=false,activeColor="Red";
+let framesSent=0,framesRecv=0;
 
+// Debug helpers
+function dbg(key,val){document.getElementById("d-"+key).textContent=val;}
+function setSocketStatus(s){dbg("socket",s);}
+
+// Color grid
 const grid=document.getElementById("color-grid");
 Object.entries(COLORS).forEach(([name,hex])=>{
   const btn=document.createElement("button");
@@ -376,57 +395,75 @@ function setColor(name){
   pill.style.color=["White","Yellow","Cyan"].includes(name)?"#000":"#fff";
   pill.textContent=name; activeColor=name;
 }
-
-document.getElementById("brush-slider").addEventListener("input",e=>{
-  socket.emit("set_brush",{size:parseInt(e.target.value)});
-});
-
-function toggleMirror(){
-  socket.emit("toggle_mirror"); mirrorOn=!mirrorOn;
-  const btn=document.getElementById("mirror-btn");
-  btn.textContent=mirrorOn?"🪞 Mirror: ON":"🪞 Mirror: OFF";
-  btn.className="toggle-btn"+(mirrorOn?" on":"");
-}
-function toggleParticles(){
-  socket.emit("toggle_particles"); particleOn=!particleOn;
-  const btn=document.getElementById("particle-btn");
-  btn.textContent=particleOn?"✨ Particles: ON":"✨ Particles: OFF";
-  btn.className="toggle-btn"+(particleOn?" on purple":"");
-}
+document.getElementById("brush-slider").addEventListener("input",e=>socket.emit("set_brush",{size:parseInt(e.target.value)}));
+function toggleMirror(){socket.emit("toggle_mirror");mirrorOn=!mirrorOn;const b=document.getElementById("mirror-btn");b.textContent=mirrorOn?"🪞 Mirror: ON":"🪞 Mirror: OFF";b.className="toggle-btn"+(mirrorOn?" on":"");}
+function toggleParticles(){socket.emit("toggle_particles");particleOn=!particleOn;const b=document.getElementById("particle-btn");b.textContent=particleOn?"✨ Particles: ON":"✨ Particles: OFF";b.className="toggle-btn"+(particleOn?" on purple":"");}
 function clearCanvas(){socket.emit("clear_canvas");}
 
+// ── Camera ────────────────────────────────────────────────────────
 async function startCamera(){
+  document.getElementById("start-btn").textContent="Starting...";
+  document.getElementById("start-btn").disabled=true;
   try{
-    const stream=await navigator.mediaDevices.getUserMedia({video:{width:640,height:480,facingMode:"user"},audio:false});
+    const stream=await navigator.mediaDevices.getUserMedia({
+      video:{width:{ideal:640},height:{ideal:480},facingMode:"user"},audio:false
+    });
     const video=document.getElementById("local-video");
-    video.srcObject=stream; await video.play();
+    video.srcObject=stream;
+    await new Promise(res=>{video.onloadedmetadata=res;});
+    await video.play();
+
+    // Wait a moment for video to be truly ready
+    await new Promise(res=>setTimeout(res,500));
+
     document.getElementById("no-cam").style.display="none";
-    document.getElementById("gesture-badge").textContent="🤝 Connected!";
-    streaming=true;
+    document.getElementById("gesture-badge").textContent="✅ Camera active";
+
     const canvas=document.getElementById("capture-canvas");
-    canvas.width=640; canvas.height=480;
     const ctx=canvas.getContext("2d");
+
+    // Use actual video dimensions
+    canvas.width=video.videoWidth||640;
+    canvas.height=video.videoHeight||480;
+
+    // Send frames at 15fps
     setInterval(()=>{
-      if(!streaming)return;
-      ctx.drawImage(video,0,0,640,480);
-      socket.emit("frame",{image:canvas.toDataURL("image/jpeg",0.7).split(",")[1]});
-    },50);
+      if(video.readyState<2)return;
+      canvas.width=video.videoWidth; canvas.height=video.videoHeight;
+      ctx.drawImage(video,0,0);
+      const b64=canvas.toDataURL("image/jpeg",0.65).split(",")[1];
+      socket.emit("frame",{image:b64});
+      framesSent++;
+      dbg("sent",framesSent);
+    },67);
+
   }catch(err){
-    document.getElementById("gesture-badge").textContent="❌ Camera denied";
+    document.getElementById("gesture-badge").textContent="❌ "+err.message;
+    document.getElementById("start-btn").textContent="▶ Retry";
+    document.getElementById("start-btn").disabled=false;
+    console.error(err);
   }
 }
 
+// ── Receive processed frames ──────────────────────────────────────
 socket.on("frame",data=>{
+  framesRecv++;
+  dbg("recv",framesRecv);
   const img=document.getElementById("video-feed");
   img.src="data:image/jpeg;base64,"+data.image;
-  if(img.style.display==="none")img.style.display="block";
+  if(img.style.display==="none"){
+    img.style.display="block";
+    document.getElementById("no-cam").style.display="none";
+  }
   document.getElementById("gesture-badge").textContent=data.gesture||"No Hand";
-  if(data.mirror!==mirrorOn){mirrorOn=data.mirror;const btn=document.getElementById("mirror-btn");btn.textContent=mirrorOn?"🪞 Mirror: ON":"🪞 Mirror: OFF";btn.className="toggle-btn"+(mirrorOn?" on":"");}
-  if(data.particles!==particleOn){particleOn=data.particles;const btn=document.getElementById("particle-btn");btn.textContent=particleOn?"✨ Particles: ON":"✨ Particles: OFF";btn.className="toggle-btn"+(particleOn?" on purple":"");}
+  if(data.mirror!==mirrorOn){mirrorOn=data.mirror;const b=document.getElementById("mirror-btn");b.textContent=mirrorOn?"🪞 Mirror: ON":"🪞 Mirror: OFF";b.className="toggle-btn"+(mirrorOn?" on":"");}
+  if(data.particles!==particleOn){particleOn=data.particles;const b=document.getElementById("particle-btn");b.textContent=particleOn?"✨ Particles: ON":"✨ Particles: OFF";b.className="toggle-btn"+(particleOn?" on purple":"");}
   if(data.color&&data.color!==activeColor)setColor(data.color);
 });
-socket.on("connect",()=>{if(!streaming)document.getElementById("gesture-badge").textContent="👋 Start camera";});
-socket.on("disconnect",()=>{document.getElementById("gesture-badge").textContent="❌ Disconnected";});
+
+socket.on("connect",()=>{setSocketStatus("✅ connected");});
+socket.on("disconnect",reason=>{setSocketStatus("❌ "+reason);document.getElementById("gesture-badge").textContent="❌ Disconnected";});
+socket.on("connect_error",err=>{setSocketStatus("❌ "+err.message);});
 </script>
 </body>
 </html>
