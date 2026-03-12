@@ -18,6 +18,7 @@ app = Flask(__name__)
 app.config["SECRET_KEY"] = "airwriter-secret"
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading",
                     max_http_buffer_size=10 * 1024 * 1024,
+                    transports=["polling", "websocket"],
                     ping_timeout=60, ping_interval=25)
 
 mp_hands       = mp.solutions.hands
@@ -368,7 +369,7 @@ HTML = r"""
 
 <script>
 const COLORS={Red:"#FF3B3B",Green:"#3BFF6A",Blue:"#3B7FFF",Yellow:"#FFE83B",Purple:"#CC3BFF",Cyan:"#3BFFFF",White:"#FFFFFF",Orange:"#FFA53B"};
-const socket=io({transports:["websocket","polling"]});
+const socket=io({transports:["polling","websocket"],upgrade:true});
 let mirrorOn=false,particleOn=false,activeColor="Red";
 let framesSent=0,framesRecv=0;
 
